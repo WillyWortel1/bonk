@@ -15,9 +15,20 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;backg
 #touch{display:none;box-sizing:border-box;width:100%;padding:8px 14px calc(12px + env(safe-area-inset-bottom));justify-content:space-between;align-items:center}
 body.touch #touch{display:flex}
 body.touch #mute{position:static;opacity:.9;padding:6px 6px;font-size:11px}
-.dpad{display:grid;grid-template-columns:repeat(3,58px);grid-template-rows:repeat(3,52px);gap:4px;touch-action:none;padding:6px;margin:-6px;border-radius:14px}
-.dpad .btn{pointer-events:none}
-#bU{grid-column:2;grid-row:1}#bL{grid-column:1;grid-row:2}#bR{grid-column:3;grid-row:2}#bD{grid-column:2;grid-row:3}
+.stick{position:relative;width:164px;height:164px;flex:0 0 164px;touch-action:none}
+.stick *{pointer-events:none}
+.stick .base{position:absolute;left:12px;top:12px;width:140px;height:140px;border-radius:50%;box-sizing:border-box;background:radial-gradient(circle at 50% 45%,#2a3248 0,#1a1f2e 55%,#10131c 100%);border:4px solid #3b4660;box-shadow:0 0 0 4px #0b0e16,0 6px 0 4px #05070c,inset 0 4px 0 rgba(143,176,255,.12),inset 0 -6px 0 rgba(0,0,0,.45)}
+.stick .well{position:absolute;left:58px;top:58px;width:48px;height:48px;border-radius:50%;background:#0b0e16;box-shadow:inset 0 4px 0 #000,0 0 0 3px #2a3248}
+.stick .notch{position:absolute;width:0;height:0;border:9px solid transparent;opacity:.55;transition:opacity .08s}
+.stick .notch.on{opacity:1;filter:drop-shadow(0 0 3px #8fb0ff)}
+#bU{left:73px;top:16px;border-bottom:12px solid #7ad7ff;border-top:0}
+#bD{left:73px;bottom:16px;border-top:12px solid #7ad7ff;border-bottom:0}
+#bL{top:73px;left:16px;border-right:12px solid #7ad7ff;border-left:0}
+#bR{top:73px;right:16px;border-left:12px solid #7ad7ff;border-right:0}
+.stick .shaft{position:absolute;left:76px;top:82px;width:12px;height:0;transform-origin:50% 0;background:linear-gradient(90deg,#5b6070 0 3px,#c9ccd6 3px 6px,#8a8f9c 6px 9px,#4c5160 9px);border-radius:2px}
+.stick .ball{position:absolute;left:54px;top:54px;width:56px;height:56px;border-radius:50%;box-sizing:border-box;background:radial-gradient(circle at 36% 30%,#ff8a8a 0 12%,#e8344e 13% 55%,#9e1428 56% 100%);border:3px solid #4a0610;box-shadow:0 5px 0 #2a0308,0 7px 6px rgba(0,0,0,.55)}
+.stick .ball::after{content:'';position:absolute;left:12px;top:9px;width:10px;height:6px;background:#fff;box-shadow:12px 0 0 -1px rgba(255,255,255,.55),-3px 5px 0 -1px rgba(255,255,255,.7)}
+.stick.back .ball,.stick.back .shaft{transition:transform .16s cubic-bezier(.3,1.8,.5,1),height .16s ease-out}
 .btn{box-sizing:border-box;background:#1d2333;border:2px solid #3b4660;color:#cfe;border-radius:10px;font:bold 18px monospace;display:flex;align-items:center;justify-content:center;touch-action:none;opacity:.9}
 .btn.on{background:#41507a;border-color:#8fb0ff}
 .act{display:flex;flex-direction:column;align-items:center;gap:12px}
@@ -32,11 +43,10 @@ body.touch.land #touch>*{pointer-events:auto}
 <button id="mute" type="button" aria-label="Geluid aan/uit">GELUID AAN</button>
 <div id="wrap"><canvas id="c" width="224" height="256" aria-label="Bonk! spel"></canvas></div>
 <div id="touch">
-  <div class="dpad" id="dpad">
-    <div class="btn" id="bU" data-k="up">&#9650;</div>
-    <div class="btn" id="bL" data-k="left">&#9664;</div>
-    <div class="btn" id="bR" data-k="right">&#9654;</div>
-    <div class="btn" id="bD" data-k="down">&#9660;</div>
+  <div class="stick" id="dpad" aria-label="Joystick">
+    <div class="base"></div>
+    <div class="notch" id="bU"></div><div class="notch" id="bL"></div><div class="notch" id="bR"></div><div class="notch" id="bD"></div>
+    <div class="well"></div><div class="shaft" id="shaft"></div><div class="ball" id="ball"></div>
   </div>
   <div class="act">
     <div class="btn" id="bP" data-k="pause">II</div>
@@ -65,7 +75,7 @@ function resize(){
   document.body.classList.toggle('land',isTouch&&land);
   let aw=innerWidth,ah=innerHeight;
   const t=document.getElementById('touch');
-  if(isTouch){ if(land) aw=Math.max(160,innerWidth-2*(190+24)); else ah=innerHeight-t.offsetHeight; }
+  if(isTouch){ if(land) aw=Math.max(160,innerWidth-2*(164+24)); else ah=innerHeight-t.offsetHeight; }
   const dpr=window.devicePixelRatio||1;
   const s=Math.floor(Math.min(aw*dpr/W,ah*dpr/H));
   let cw,ch;
@@ -200,13 +210,19 @@ document.querySelectorAll('#bJ,#bP').forEach(b=>{
     if(dist<DEAD)setDir(null);
     else if(Math.abs(dy)>=dist*VCOS)setDir(dy<0?'up':'down');
     else setDir(dx<0?'left':'right');}
-  function end(e){if(e.pointerId!==id)return;id=null;setDir(null);}
+  const ball=document.getElementById('ball'),shaft=document.getElementById('shaft'),MAXR=40;
+  function look(e){let x=0,y=0;if(e){const r=pad.getBoundingClientRect();x=e.clientX-(r.left+r.width/2);y=e.clientY-(r.top+r.height/2);const d=Math.hypot(x,y);if(d>MAXR){x=x/d*MAXR;y=y/d*MAXR;}}
+    ball.style.transform='translate('+x.toFixed(1)+'px,'+y.toFixed(1)+'px)';
+    const L=Math.hypot(x,y);shaft.style.height=L.toFixed(1)+'px';shaft.style.transform='rotate('+(Math.atan2(y,x)*180/Math.PI-90).toFixed(1)+'deg)';}
+  function end(e){if(e.pointerId!==id)return;id=null;setDir(null);pad.classList.add('back');look(null);}
+  pad.addEventListener('pointermove',e=>{if(e.pointerId===id)look(e);});
+  pad.addEventListener('pointerdown',e=>{if(id!==null)return;pad.classList.remove('back');look(e);});
   pad.addEventListener('pointerdown',e=>{e.preventDefault();audio();if(id!==null)return;id=e.pointerId;
     try{pad.setPointerCapture(id);}catch(_){}upd(e);
     if(mode==='title'||mode==='gameover')pressed.start=true;});
   pad.addEventListener('pointermove',e=>{if(e.pointerId===id){e.preventDefault();upd(e);}});
   pad.addEventListener('pointerup',end);pad.addEventListener('pointercancel',end);pad.addEventListener('lostpointercapture',end);
-  window.__stick=DEBUG?{active:()=>id!==null,dir:()=>dir}:undefined;
+  window.__stick=DEBUG?{active:()=>id!==null,dir:()=>dir,ball:()=>ball.getBoundingClientRect()}:undefined;
 })();
 ['contextmenu','selectstart','gesturestart','dblclick'].forEach(t=>document.addEventListener(t,e=>e.preventDefault(),{passive:false}));
 document.addEventListener('touchmove',e=>{if(e.touches.length>1||e.target.closest('#touch,#wrap'))e.preventDefault();},{passive:false});
