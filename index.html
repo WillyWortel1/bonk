@@ -110,10 +110,36 @@ const SPR={
 function spr(s,x,y,flip){ctx.drawImage(flip?s.f:s.n,Math.round(x),Math.round(y));}
 
 /* ---------- geluid (WebAudio, 8-bit) ---------- */
-let actx=null;
-function audio(){if(!actx){try{actx=new (window.AudioContext||window.webkitAudioContext)();}catch(e){actx=null;}}if(actx&&actx.state==='suspended')actx.resume();}
-function tone(f,d,type,vol,slide,delay){if(muted||!actx)return;const t=actx.currentTime+(delay||0);const o=actx.createOscillator(),g=actx.createGain();o.type=type||'square';o.frequency.setValueAtTime(f,t);if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(30,f+slide),t+d);g.gain.setValueAtTime(vol||.05,t);g.gain.exponentialRampToValueAtTime(.0001,t+d);o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+d+.03);}
-function noise(d,vol,delay){if(muted||!actx)return;const t=actx.currentTime+(delay||0);const n=Math.floor(actx.sampleRate*d),buf=actx.createBuffer(1,n,actx.sampleRate),a=buf.getChannelData(0);for(let i=0;i<n;i++)a[i]=(Math.random()*2-1)*(1-i/n);const s=actx.createBufferSource();s.buffer=buf;const g=actx.createGain();g.gain.value=vol;s.connect(g);g.connect(actx.destination);s.start(t);}
+let actx=null,master=null,unlocked=false,silentEl=null,audioOkOnce=false,nodeCount=0;
+const isIOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+function silentWavURI(){ // 0,5 s stille 8-bit mono WAV, in JS gemaakt (geen extern bestand)
+  const sr=8000,n=4000,b=new Uint8Array(44+n),v=new DataView(b.buffer);const w=(o,s)=>{for(let i=0;i<s.length;i++)b[o+i]=s.charCodeAt(i);};
+  w(0,'RIFF');v.setUint32(4,36+n,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,sr,true);v.setUint32(28,sr,true);v.setUint16(32,1,true);v.setUint16(34,8,true);w(36,'data');v.setUint32(40,n,true);b.fill(128,44);
+  let s='';for(let i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return 'data:audio/wav;base64,'+btoa(s);}
+function audio(){ // altijd synchroon vanuit een gebruikersgebaar aanroepen
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
+    if(navigator.audioSession){try{if(navigator.audioSession.type!=='playback')navigator.audioSession.type='playback';}catch(e){}}
+    if(!actx){actx=new AC();master=actx.createGain();master.gain.value=muted?0:0.9;master.connect(actx.destination);
+      actx.onstatechange=()=>{if(actx.state==='running')audioOkOnce=true;};}
+    if(actx.state!=='running'){const p=actx.resume();if(p&&p.catch)p.catch(()=>{});}
+    if(!unlocked){unlocked=true;
+      const b=actx.createBuffer(1,1,22050),s=actx.createBufferSource();s.buffer=b;s.connect(actx.destination);s.start(0);
+      if(isIOS&&!navigator.audioSession){try{silentEl=document.createElement('audio');silentEl.src=silentWavURI();silentEl.loop=true;silentEl.setAttribute('playsinline','');silentEl.setAttribute('x-webkit-airplay','deny');silentEl.preload='auto';}catch(e){silentEl=null;}}
+    }
+    if(silentEl&&silentEl.paused&&!document.hidden){const p=silentEl.play();if(p&&p.catch)p.catch(()=>{});}
+    if(actx.state==='running')audioOkOnce=true;
+  }catch(e){}
+}
+['pointerdown','touchstart','touchend','mousedown','click','keydown'].forEach(t=>document.addEventListener(t,audio,{capture:true,passive:true}));
+document.addEventListener('visibilitychange',()=>{if(!actx)return;
+  if(document.hidden){if(silentEl)silentEl.pause();if(actx.state==='running'){const p=actx.suspend();if(p&&p.catch)p.catch(()=>{});}}
+  else{const p=actx.resume();if(p&&p.catch)p.catch(()=>{});if(silentEl&&silentEl.paused){const q=silentEl.play();if(q&&q.catch)q.catch(()=>{});}}});
+function canPlay(){return !muted&&actx&&master;}
+function env(g,t,d,vol){vol=Math.min(.35,(vol||.05)*1.8);g.gain.setValueAtTime(0.0001,t);g.gain.linearRampToValueAtTime(vol,t+.006);g.gain.setValueAtTime(vol,t+Math.max(.01,d*.35));g.gain.exponentialRampToValueAtTime(.0001,t+d);}
+function tone(f,d,type,vol,slide,delay){if(!canPlay())return;try{d=Math.max(.06,d);const t=actx.currentTime+.01+(delay||0);const o=actx.createOscillator(),g=actx.createGain();nodeCount+=2;o.type=type||'square';o.frequency.setValueAtTime(f,t);if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(30,f+slide),t+d);env(g,t,d,vol);o.connect(g);g.connect(master);o.start(t);o.stop(t+d+.05);}catch(e){}}
+function noise(d,vol,delay){if(!canPlay())return;try{const t=actx.currentTime+.01+(delay||0);const n=Math.floor(actx.sampleRate*d),buf=actx.createBuffer(1,n,actx.sampleRate),a=buf.getChannelData(0);for(let i=0;i<n;i++)a[i]=(Math.random()*2-1)*(1-i/n);const s=actx.createBufferSource();s.buffer=buf;const g=actx.createGain();nodeCount+=2;g.gain.value=Math.min(.4,vol*1.6);s.connect(g);g.connect(master);s.start(t);}catch(e){}}
 const sfx={
  jump(){tone(260,.16,'square',.06,420);},
  point(){tone(988,.05,'square',.05);tone(1319,.09,'square',.05,0,.05);},
@@ -132,7 +158,7 @@ const sfx={
 };
 const muteBtn=document.getElementById('mute');
 function updMute(){muteBtn.textContent=muted?'GELUID UIT':'GELUID AAN';}
-function toggleMute(){muted=!muted;lsSet('bonk-mute',muted?'1':'0');updMute();audio();}
+function toggleMute(){muted=!muted;lsSet('bonk-mute',muted?'1':'0');updMute();audio();if(master)master.gain.value=muted?0:0.9;if(!muted)sfx.point();}
 muteBtn.addEventListener('click',e=>{e.stopPropagation();toggleMute();muteBtn.blur();});
 updMute();
 if(isTouch)document.querySelector('#touch .act').prepend(muteBtn);
@@ -541,6 +567,7 @@ function drawTitle(){
   for(let i=0;i<3;i++){const x=((frame*1.1+i*80)%260)-20;drawBarrel(x,surf(demo.g,Math.max(0,Math.min(224,x))),frame*1.1);}
   if(Math.floor(frame/30)%2===0)text(isTouch?'TIK OM TE STARTEN':'DRUK OP SPATIE OM TE STARTEN',W/2,172,'#fff',1,'center');
   text('HOOG '+String(hiScore).padStart(6,'0'),W/2,186,'#ff7a1a',1,'center');
+  if(isTouch&&!muted&&!audioOkOnce&&!(actx&&actx.state==='running')&&Math.floor(frame/20)%3!==0){ctx.fillStyle='#000';ctx.fillRect(W/2-49,197,98,11);text('TIK VOOR GELUID',W/2,199,'#ffd23f',1,'center');}
   text('PIJLTJES/WASD: LOPEN, KLIMMEN',W/2,226,'#8a8f9c',1,'center');
   text('SPATIE: SPRINGEN  P: PAUZE  M: GELUID',W/2,238,'#8a8f9c',1,'center');
 }
@@ -555,7 +582,7 @@ function render(){
 let last=performance.now(),acc=0;const STEP=1000/60;
 function tick(now){acc+=Math.min(250,now-last);last=now;let n=0;while(acc>=STEP&&n<5){update();acc-=STEP;n++;}if(n>=5)acc=0;render();requestAnimationFrame(tick);}
 if(DEBUG){window.__kong={state:()=>({mode:mode,paused:paused,level:level,lives:lives,score:score,bonus:bonus,barrels:barrels.length,fires:fires.length,rivets:rivets.filter(r=>!r.removed).length,px:P.x,py:P.y,pstate:P.state,hammer:P.hammer,dir:P.dir,airVX:P.airVX,keys:Object.assign({},keys),bl:barrels.map(b=>[b.x,b.y,b.state]),fl:fires.map(f=>[f.x,f.y])}),
-  teleport:(x,y)=>{P.x=x;P.y=y;P.state='walk';},top:()=>dbgTop(),win:()=>winLevel(),setLives:n=>{lives=n;},clearEnemies:()=>{barrels=[];fires=[];},kill:()=>die(),setLevel:n=>{level=n;startLevel();}};}
+  teleport:(x,y)=>{P.x=x;P.y=y;P.state='walk';},top:()=>dbgTop(),win:()=>winLevel(),setLives:n=>{lives=n;},clearEnemies:()=>{barrels=[];fires=[];},audio:()=>({state:actx?actx.state:'none',muted:muted,gain:master?master.gain.value:null,nodes:nodeCount,ls:lsGet('bonk-mute',null),btn:muteBtn.textContent,silentEl:!!silentEl}),sfxAll:()=>{const n0=nodeCount;for(const k in sfx)sfx[k]();return nodeCount-n0;},kill:()=>die(),setLevel:n=>{level=n;startLevel();}};}
 resize();requestAnimationFrame(tick);
 })();
 </script>
